@@ -57,7 +57,8 @@ async def fetch_history(source: Source) -> None:
 
     saved = 0
     async for message in app.get_chat_history(source.external_id):
-        if message.date < since:
+        msg_date = message.date.replace(tzinfo=timezone.utc) if message.date.tzinfo is None else message.date
+        if msg_date < since:
             break
         if message.text or message.caption:
             if await save_message(source, message):
@@ -80,20 +81,18 @@ async def load_sources() -> list[Source]:
 
 
 async def resolve_and_update_source(source: Source) -> Source:
-    """Resolve username to numeric channel id and update DB."""
     try:
         chat = await app.get_chat(source.external_id)
-        numeric_id = str(chat.id)
-        if source.external_id != numeric_id:
+        if chat.title and chat.title != source.title:
             async with AsyncSessionFactory() as session:
                 await session.execute(
                     update(Source)
                     .where(Source.id == source.id)
-                    .values(external_id=numeric_id, title=chat.title or source.title)
+                    .values(title=chat.title)
                 )
                 await session.commit()
-            log.info("Resolved %s → %s (%s)", source.external_id, numeric_id, chat.title)
-            source.external_id = numeric_id
+            source.title = chat.title
+        log.info("Resolved %s (%s)", source.external_id, chat.title)
     except Exception as e:
         log.warning("Could not resolve source %s: %s", source.external_id, e)
     return source
@@ -118,7 +117,7 @@ async def main() -> None:
                         e.value, source.external_id)
 
     # Register handler for new messages from our channels
-    channel_ids = [int(s.external_id) for s in sources if s.external_id.lstrip("-").isdigit()]
+    channel_ids = [s.external_id for s in sources]
 
     @app.on_message(filters.chat(channel_ids))
     async def on_new_message(client: Client, message: Message) -> None:
