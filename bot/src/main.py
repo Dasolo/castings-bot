@@ -1,0 +1,55 @@
+import asyncio
+import logging
+
+from aiogram import Bot, Dispatcher
+from aiogram.filters import CommandStart
+from aiogram.types import Message
+from sqlalchemy import select
+
+from shared.config import settings
+from shared.db import AsyncSessionFactory
+from shared.models import User
+
+logging.basicConfig(
+    level=logging.DEBUG if settings.debug else logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+log = logging.getLogger(__name__)
+
+
+async def cmd_start(message: Message) -> None:
+    tg_id = message.from_user.id
+    username = message.from_user.username
+
+    async with AsyncSessionFactory() as session:
+        result = await session.execute(
+            select(User).where(User.tg_user_id == tg_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if user is None:
+            user = User(tg_user_id=tg_id, username=username)
+            session.add(user)
+            await session.commit()
+            log.info("Registered new user tg_id=%s username=%s", tg_id, username)
+            await message.answer(
+                "Привет! Ты зарегистрирован.\n"
+                "Скоро здесь появятся кастинги. 🎭"
+            )
+        else:
+            if user.username != username:
+                user.username = username
+                await session.commit()
+            await message.answer("Ты уже зарегистрирован. Ждём кастингов! 🎭")
+
+
+async def main() -> None:
+    log.info("Starting bot...")
+    bot = Bot(token=settings.bot_token)
+    dp = Dispatcher()
+    dp.message.register(cmd_start, CommandStart())
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

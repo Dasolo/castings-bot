@@ -1,0 +1,13 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Зависимости отдельным слоем — docker кэширует, 
+# пока requirements.txt не меняется, пересборка мгновенная
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY shared/ ./shared/
+COPY src/ ./src/
+
+CMD ["python", "-m", "src.main"]
