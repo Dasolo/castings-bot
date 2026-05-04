@@ -52,15 +52,14 @@ async def send_batch(bot: Bot) -> None:
     log.info("Sending %d castings to %d users", len(rows), len(users))
 
     for casting, raw_msg, source in rows:
-        from_chat = f"@{source.external_id}"
         msg_id = int(raw_msg.external_msg_id)
+        link = f"https://t.me/{source.external_id}/{msg_id}"
 
         for user in users:
             try:
-                await bot.forward_message(
+                await bot.send_message(
                     chat_id=user.tg_user_id,
-                    from_chat_id=from_chat,
-                    message_id=msg_id,
+                    text=link,
                 )
                 async with AsyncSessionFactory() as session:
                     await session.execute(
@@ -70,9 +69,10 @@ async def send_batch(bot: Bot) -> None:
                     )
                     await session.commit()
                 await asyncio.sleep(0.05)
+                log.info("Sent casting_id=%s to tg_id=%s", casting.id, user.tg_user_id)
             except Exception as e:
                 log.warning(
-                    "Failed to forward casting_id=%s to tg_id=%s: %s",
+                    "Failed to send casting_id=%s to tg_id=%s: %s",
                     casting.id, user.tg_user_id, e,
                 )
 
@@ -85,7 +85,7 @@ async def main() -> None:
     scheduler.add_job(send_batch, "interval", minutes=5, args=[bot])
     scheduler.start()
 
-    await send_batch(bot)  # сразу при старте
+    await send_batch(bot)
     await asyncio.Event().wait()
 
 

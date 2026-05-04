@@ -2,16 +2,15 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
 from pyrogram.types import Message
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from shared.config import settings
 from shared.db import AsyncSessionFactory
-from shared.models import Casting, RawMessage, SentLog, Source, User
+from shared.models import RawMessage, Source
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -83,72 +82,12 @@ async def load_sources() -> list[Source]:
         return list(result.scalars().all())
 
 
-async def send_batch() -> None:
-    async with AsyncSessionFactory() as session:
-        users_result = await session.execute(
-            select(User).where(User.is_active == True)
-        )
-        users = users_result.scalars().all()
-
-        if not users:
-            return
-
-        user_ids = [u.id for u in users]
-
-        castings_result = await session.execute(
-            select(Casting, RawMessage, Source)
-            .join(RawMessage, Casting.raw_message_id == RawMessage.id)
-            .join(Source, RawMessage.source_id == Source.id)
-            .where(
-                ~Casting.id.in_(
-                    select(SentLog.casting_id).where(
-                        SentLog.user_id.in_(user_ids)
-                    )
-                )
-            )
-            .order_by(Casting.created_at)
-            .limit(50)
-        )
-        rows = castings_result.all()
-
-    if not rows:
-        log.info("No new castings to send")
-        return
-
-    log.info("Sending %d castings to %d users", len(rows), len(users))
-
-    for casting, raw_msg, source in rows:
-        msg_id = int(raw_msg.external_msg_id)
-        for user in users:
-            try:
-                result = await app.forward_messages(
-                    chat_id=user.tg_user_id,
-                    from_chat_id=source.external_id,
-                    message_ids=msg_id,
-                )
-                log.info(
-                    "Forwarded casting_id=%s to tg_id=%s result=%s",
-                    casting.id, user.tg_user_id, result,
-                )
-                async with AsyncSessionFactory() as session:
-                    await session.execute(
-                        insert(SentLog)
-                        .values(user_id=user.id, casting_id=casting.id)
-                        .on_conflict_do_nothing()
-                    )
-                    await session.commit()
-                await asyncio.sleep(0.05)
-            except Exception as e:
-                log.warning(
-                    "Failed to forward casting_id=%s to tg_id=%s from_chat=%s msg_id=%s error=%s",
-                    casting.id, user.tg_user_id, source.external_id, msg_id, e,
-                )
-
-
 async def main() -> None:
     log.info("Starting listener-tg...")
     await app.start()
-    log.info("Pyrogram client started")
+
+    me = await app.get_me()
+    log.info("Logged in as %s (id=%s)", me.username, me.id)
 
     sources = await load_sources()
     log.info("Loaded %d verified sources", len(sources))
@@ -179,11 +118,7 @@ async def main() -> None:
         if inserted:
             log.info("Saved new message from %s msg_id=%s", source.external_id, message.id)
 
-    scheduler = AsyncIOScheduler(timezone="UTC")
-    scheduler.add_job(send_batch, "interval", minutes=5)
-    scheduler.start()
-
-    await send_batch()  # сразу при старте
+    log.info("Listening on %d channels", len(channel_ids))
     await asyncio.Event().wait()
 
 
