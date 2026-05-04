@@ -1,9 +1,8 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
 
+from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from pyrogram import Client
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
@@ -17,16 +16,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-app = Client(
-    name="/app/sessions/userbot",
-    api_id=settings.api_id,
-    api_hash=settings.api_hash,
-)
 
-
-async def send_batch() -> None:
+async def send_batch(bot: Bot) -> None:
     async with AsyncSessionFactory() as session:
-        # все активные пользователи
         users_result = await session.execute(
             select(User).where(User.is_active == True)
         )
@@ -35,8 +27,8 @@ async def send_batch() -> None:
         if not users:
             return
 
-        # кастинги которые ещё не отправлены хотя бы одному юзеру
-        # берём через left join с sent_log
+        user_ids = [u.id for u in users]
+
         castings_result = await session.execute(
             select(Casting, RawMessage, Source)
             .join(RawMessage, Casting.raw_message_id == RawMessage.id)
@@ -44,7 +36,7 @@ async def send_batch() -> None:
             .where(
                 ~Casting.id.in_(
                     select(SentLog.casting_id).where(
-                        SentLog.user_id.in_([u.id for u in users])
+                        SentLog.user_id.in_(user_ids)
                     )
                 )
             )
@@ -60,12 +52,15 @@ async def send_batch() -> None:
     log.info("Sending %d castings to %d users", len(rows), len(users))
 
     for casting, raw_msg, source in rows:
+        from_chat = f"@{source.external_id}"
+        msg_id = int(raw_msg.external_msg_id)
+
         for user in users:
             try:
-                await app.forward_messages(
+                await bot.forward_message(
                     chat_id=user.tg_user_id,
-                    from_chat_id=source.external_id,
-                    message_ids=int(raw_msg.external_msg_id),
+                    from_chat_id=from_chat,
+                    message_id=msg_id,
                 )
                 async with AsyncSessionFactory() as session:
                     await session.execute(
@@ -78,22 +73,21 @@ async def send_batch() -> None:
             except Exception as e:
                 log.warning(
                     "Failed to forward casting_id=%s to tg_id=%s: %s",
-                    casting.id, user.tg_user_id, e
+                    casting.id, user.tg_user_id, e,
                 )
 
 
 async def main() -> None:
     log.info("Starting sender...")
-    await app.start()
-    log.info("Pyrogram client started")
+    bot = Bot(token=settings.bot_token)
 
     scheduler = AsyncIOScheduler(timezone="UTC")
-    scheduler.add_job(send_batch, "interval", minutes=5)
+    scheduler.add_job(send_batch, "interval", minutes=5, args=[bot])
     scheduler.start()
 
-    await send_batch()  # сразу при старте
+    await send_batch(bot)  # сразу при старте
     await asyncio.Event().wait()
 
 
 if __name__ == "__main__":
-    app.run(main())
+    asyncio.run(main())
