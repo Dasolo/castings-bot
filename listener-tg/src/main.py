@@ -84,76 +84,66 @@ async def load_sources() -> list[Source]:
 
 
 async def send_batch() -> None:
-    try:
-        result = await app.forward_messages(
-            chat_id=user.tg_user_id,
-            from_chat_id=source.external_id,
-            message_ids=msg_id,
+    async with AsyncSessionFactory() as session:
+        users_result = await session.execute(
+            select(User).where(User.is_active == True)
         )
-        log.info(
-            "Forwarded casting_id=%s to tg_id=%s result=%s",
-            casting.id, user.tg_user_id, result,
-        )
-        async with AsyncSessionFactory() as session:
-            users_result = await session.execute(
-                select(User).where(User.is_active == True)
-            )
-            users = users_result.scalars().all()
+        users = users_result.scalars().all()
 
-            if not users:
-                return
-
-            user_ids = [u.id for u in users]
-
-            castings_result = await session.execute(
-                select(Casting, RawMessage, Source)
-                .join(RawMessage, Casting.raw_message_id == RawMessage.id)
-                .join(Source, RawMessage.source_id == Source.id)
-                .where(
-                    ~Casting.id.in_(
-                        select(SentLog.casting_id).where(
-                            SentLog.user_id.in_(user_ids)
-                        )
-                    )
-                )
-                .order_by(Casting.created_at)
-                .limit(50)
-            )
-            rows = castings_result.all()
-
-        if not rows:
-            log.info("No new castings to send")
+        if not users:
             return
 
-        log.info("Sending %d castings to %d users", len(rows), len(users))
+        user_ids = [u.id for u in users]
 
-        for casting, raw_msg, source in rows:
-            msg_id = int(raw_msg.external_msg_id)
-            for user in users:
-                try:
-                    await app.forward_messages(
-                        chat_id=user.tg_user_id,
-                        from_chat_id=source.external_id,
-                        message_ids=msg_id,
+        castings_result = await session.execute(
+            select(Casting, RawMessage, Source)
+            .join(RawMessage, Casting.raw_message_id == RawMessage.id)
+            .join(Source, RawMessage.source_id == Source.id)
+            .where(
+                ~Casting.id.in_(
+                    select(SentLog.casting_id).where(
+                        SentLog.user_id.in_(user_ids)
                     )
-                    async with AsyncSessionFactory() as session:
-                        await session.execute(
-                            insert(SentLog)
-                            .values(user_id=user.id, casting_id=casting.id)
-                            .on_conflict_do_nothing()
-                        )
-                        await session.commit()
-                    await asyncio.sleep(0.05)
-                except Exception as e:
-                    log.warning(
-                        "Failed to forward casting_id=%s to tg_id=%s: %s",
-                        casting.id, user.tg_user_id, e,
-                    )
-    except Exception as e:
-        log.warning(
-            "Failed to forward casting_id=%s to tg_id=%s from_chat=%s msg_id=%s error=%s",
-            casting.id, user.tg_user_id, source.external_id, msg_id, e,
+                )
+            )
+            .order_by(Casting.created_at)
+            .limit(50)
         )
+        rows = castings_result.all()
+
+    if not rows:
+        log.info("No new castings to send")
+        return
+
+    log.info("Sending %d castings to %d users", len(rows), len(users))
+
+    for casting, raw_msg, source in rows:
+        msg_id = int(raw_msg.external_msg_id)
+        for user in users:
+            try:
+                result = await app.forward_messages(
+                    chat_id=user.tg_user_id,
+                    from_chat_id=source.external_id,
+                    message_ids=msg_id,
+                )
+                log.info(
+                    "Forwarded casting_id=%s to tg_id=%s result=%s",
+                    casting.id, user.tg_user_id, result,
+                )
+                async with AsyncSessionFactory() as session:
+                    await session.execute(
+                        insert(SentLog)
+                        .values(user_id=user.id, casting_id=casting.id)
+                        .on_conflict_do_nothing()
+                    )
+                    await session.commit()
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                log.warning(
+                    "Failed to forward casting_id=%s to tg_id=%s from_chat=%s msg_id=%s error=%s",
+                    casting.id, user.tg_user_id, source.external_id, msg_id, e,
+                )
+
 
 async def main() -> None:
     log.info("Starting listener-tg...")
