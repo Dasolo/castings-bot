@@ -45,11 +45,11 @@ restart-remote:
 # Open SSH tunnel: Postgres on VPS becomes available at localhost:5433
 # Use in DataGrip / DBeaver / psql: host=localhost port=5433
 db-tunnel:
-	ssh -i $(SSH_KEY) -L 5433:localhost:5432 $(HOST) -N
+	ssh -i $(SSH_KEY) -L 5433:localhost:5433 $(HOST) -N
 
 # Open psql directly on the server
 db-remote:
-	$(SSH) "cd $(REMOTE) && docker compose exec db psql -U $${POSTGRES_USER} $${POSTGRES_DB}"
+	$(SSH) "cd $(REMOTE) && docker compose exec db psql -U castings castings
 
 # ─── Userbot session ──────────────────────────────────────────────────────────
 

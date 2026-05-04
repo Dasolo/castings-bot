@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
 from pyrogram.types import Message
@@ -10,7 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from shared.config import settings
 from shared.db import AsyncSessionFactory
-from shared.models import RawMessage, Source
+from shared.models import Casting, RawMessage, SentLog, Source, User
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -26,7 +27,6 @@ app = Client(
 
 
 async def save_message(source: Source, message: Message) -> bool:
-    """Save a single message. Returns True if inserted, False if duplicate."""
     raw_data = {}
     if message.media:
         raw_data["media_type"] = str(message.media)
@@ -43,7 +43,9 @@ async def save_message(source: Source, message: Message) -> bool:
                 raw_text=message.text or message.caption,
                 raw_data=raw_data or None,
             )
-            .on_conflict_do_nothing(constraint="raw_messages_source_id_external_msg_id_key")
+            .on_conflict_do_nothing(
+                constraint="raw_messages_source_id_external_msg_id_key"
+            )
         )
         result = await session.execute(stmt)
         await session.commit()
@@ -51,21 +53,22 @@ async def save_message(source: Source, message: Message) -> bool:
 
 
 async def fetch_history(source: Source) -> None:
-    """Fetch last HISTORY_DAYS days of messages for a source."""
     since = datetime.now(timezone.utc) - timedelta(days=settings.history_days)
     log.info("Fetching history for %s since %s", source.external_id, since.date())
-
     saved = 0
     async for message in app.get_chat_history(source.external_id):
-        msg_date = message.date.replace(tzinfo=timezone.utc) if message.date.tzinfo is None else message.date
+        msg_date = (
+            message.date.replace(tzinfo=timezone.utc)
+            if message.date.tzinfo is None
+            else message.date
+        )
         if msg_date < since:
             break
         if message.text or message.caption:
             if await save_message(source, message):
                 saved += 1
-        await asyncio.sleep(0.05)  # be gentle
-
-    log.info("History fetch done for %s: %d messages saved", source.external_id, saved)
+        await asyncio.sleep(0.05)
+    log.info("History done for %s: %d saved", source.external_id, saved)
 
 
 async def load_sources() -> list[Source]:
@@ -80,43 +83,78 @@ async def load_sources() -> list[Source]:
         return list(result.scalars().all())
 
 
-async def resolve_and_update_source(source: Source) -> Source:
-    try:
-        chat = await app.get_chat(source.external_id)
-        if chat.title and chat.title != source.title:
-            async with AsyncSessionFactory() as session:
-                await session.execute(
-                    update(Source)
-                    .where(Source.id == source.id)
-                    .values(title=chat.title)
+async def send_batch() -> None:
+    async with AsyncSessionFactory() as session:
+        users_result = await session.execute(
+            select(User).where(User.is_active == True)
+        )
+        users = users_result.scalars().all()
+
+        if not users:
+            return
+
+        user_ids = [u.id for u in users]
+
+        castings_result = await session.execute(
+            select(Casting, RawMessage, Source)
+            .join(RawMessage, Casting.raw_message_id == RawMessage.id)
+            .join(Source, RawMessage.source_id == Source.id)
+            .where(
+                ~Casting.id.in_(
+                    select(SentLog.casting_id).where(
+                        SentLog.user_id.in_(user_ids)
+                    )
                 )
-                await session.commit()
-            source.title = chat.title
-        log.info("Resolved %s (%s)", source.external_id, chat.title)
-    except Exception as e:
-        log.warning("Could not resolve source %s: %s", source.external_id, e)
-    return source
+            )
+            .order_by(Casting.created_at)
+            .limit(50)
+        )
+        rows = castings_result.all()
+
+    if not rows:
+        log.info("No new castings to send")
+        return
+
+    log.info("Sending %d castings to %d users", len(rows), len(users))
+
+    for casting, raw_msg, source in rows:
+        msg_id = int(raw_msg.external_msg_id)
+        for user in users:
+            try:
+                await app.forward_messages(
+                    chat_id=user.tg_user_id,
+                    from_chat_id=source.external_id,
+                    message_ids=msg_id,
+                )
+                async with AsyncSessionFactory() as session:
+                    await session.execute(
+                        insert(SentLog)
+                        .values(user_id=user.id, casting_id=casting.id)
+                        .on_conflict_do_nothing()
+                    )
+                    await session.commit()
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                log.warning(
+                    "Failed to forward casting_id=%s to tg_id=%s: %s",
+                    casting.id, user.tg_user_id, e,
+                )
 
 
 async def main() -> None:
     log.info("Starting listener-tg...")
-
     await app.start()
     log.info("Pyrogram client started")
 
     sources = await load_sources()
     log.info("Loaded %d verified sources", len(sources))
 
-    # Resolve usernames to numeric ids and fetch history
     for source in sources:
-        source = await resolve_and_update_source(source)
         try:
             await fetch_history(source)
         except FloodWait as e:
-            log.warning("FloodWait %ds while fetching history for %s, skipping",
-                        e.value, source.external_id)
+            log.warning("FloodWait %ds for %s, skipping history", e.value, source.external_id)
 
-    # Register handler for new messages from our channels
     channel_ids = [s.external_id for s in sources]
 
     @app.on_message(filters.chat(channel_ids))
@@ -124,21 +162,24 @@ async def main() -> None:
         async with AsyncSessionFactory() as session:
             source_result = await session.execute(
                 select(Source).where(
-                    Source.external_id == str(message.chat.id),
+                    Source.external_id == message.chat.username,
                     Source.source_type == "telegram",
                 )
             )
             source = source_result.scalar_one_or_none()
 
         if source is None:
-            log.warning("Received message from unknown source chat_id=%s", message.chat.id)
             return
 
         inserted = await save_message(source, message)
         if inserted:
             log.info("Saved new message from %s msg_id=%s", source.external_id, message.id)
 
-    log.info("Listening for new messages in %d channels", len(channel_ids))
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler.add_job(send_batch, "interval", minutes=5)
+    scheduler.start()
+
+    await send_batch()  # сразу при старте
     await asyncio.Event().wait()
 
 
