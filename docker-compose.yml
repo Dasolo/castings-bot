@@ -55,6 +55,8 @@ services:
     networks:
       - casting_internal
       - default
+    volumes:
+      - ./sessions:/app/sessions
 
   bot:
     build:
