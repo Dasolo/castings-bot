@@ -100,8 +100,22 @@ async def main() -> None:
 
     channel_ids = [s.external_id for s in sources]
 
+    log.info("Registered handler for channels: %s", channel_ids)
+    for ch_id in channel_ids:
+        try:
+            chat = await app.get_chat(ch_id)
+            log.info("Channel check: %s → id=%s type=%s members=%s",
+                    ch_id, chat.id, chat.type, chat.members_count)
+        except Exception as e:
+            log.warning("Channel check failed for %s: %s", ch_id, e)
+
     @app.on_message(filters.chat(channel_ids))
     async def on_new_message(client: Client, message: Message) -> None:
+        log.info(
+            "Received message from chat_id=%s username=%s msg_id=%s",
+            message.chat.id, message.chat.username, message.id,
+        )
+
         async with AsyncSessionFactory() as session:
             source_result = await session.execute(
                 select(Source).where(
@@ -117,6 +131,13 @@ async def main() -> None:
         inserted = await save_message(source, message)
         if inserted:
             log.info("Saved new message from %s msg_id=%s", source.external_id, message.id)
+
+    @app.on_message()
+    async def on_any_message(client: Client, message: Message) -> None:
+        log.debug(
+            "ANY message: chat_id=%s username=%s type=%s",
+            message.chat.id, message.chat.username, message.chat.type,
+        )
 
     log.info("Listening on %d channels", len(channel_ids))
     await asyncio.Event().wait()
