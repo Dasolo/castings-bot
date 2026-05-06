@@ -35,13 +35,13 @@ async def cmd_start(message: Message) -> None:
             log.info("Registered new user tg_id=%s username=%s", tg_id, username)
             await message.answer(
                 "Привет! Ты зарегистрирован.\n"
-                "Скоро здесь появятся кастинги. 🎭"
+                "Скоро здесь появятся кастинги. 🎭\n  /filters "
             )
         else:
             if user.username != username:
                 user.username = username
                 await session.commit()
-            await message.answer("Ты уже зарегистрирован. Ждём кастингов! 🎭")
+            await message.answer("Ты уже зарегистрирован. Ждём кастингов! 🎭\n /filters")
 
 
 async def main() -> None:
