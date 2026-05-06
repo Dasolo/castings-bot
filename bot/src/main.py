@@ -56,6 +56,7 @@ async def cmd_start(message: Message) -> None:
 
 async def cmd_fallback(message: Message, state: FSMContext) -> None:
     """Всё что не поймали роутеры — показываем главное меню."""
+    print(f"[DEBUG] Fallback triggered for: {message.text}")
     current_state = await state.get_state()
     if current_state is not None:
         # Внутри FSM — не перебиваем

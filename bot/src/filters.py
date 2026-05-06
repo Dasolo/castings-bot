@@ -8,6 +8,7 @@ from sqlalchemy import select
 from shared.db import AsyncSessionFactory
 from shared.models import User, UserFilter
 
+print("filters.py loaded")
 router = Router()
 
 

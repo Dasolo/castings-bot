@@ -12,6 +12,8 @@ from sqlalchemy.exc import IntegrityError
 from shared.db import AsyncSessionFactory
 from shared.models import Source, User
 
+print("suggest.py loaded")
+
 log = logging.getLogger(__name__)
 
 router = Router()
