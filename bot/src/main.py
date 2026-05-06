@@ -1,9 +1,14 @@
 import asyncio
 import logging
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
-from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
+from aiogram.types import (
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+)
 from sqlalchemy import select
 
 from shared.config import settings
@@ -17,6 +22,19 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 log = logging.getLogger(__name__)
+
+
+def main_menu_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="🎛 Мои фильтры"),
+                KeyboardButton(text="📢 Предложить канал"),
+            ]
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Выбери действие...",
+    )
 
 
 async def cmd_start(message: Message) -> None:
@@ -36,22 +54,43 @@ async def cmd_start(message: Message) -> None:
             log.info("Registered new user tg_id=%s username=%s", tg_id, username)
             await message.answer(
                 "Привет! Ты зарегистрирован.\n"
-                "Скоро здесь появятся кастинги. 🎭\n  /filters "
+                "Скоро здесь появятся кастинги. 🎭",
+                reply_markup=main_menu_kb(),
             )
         else:
             if user.username != username:
                 user.username = username
                 await session.commit()
-            await message.answer("Ты уже зарегистрирован. Ждём кастингов! 🎭\n /filters")
+            await message.answer(
+                "Ты уже зарегистрирован. Ждём кастингов! 🎭",
+                reply_markup=main_menu_kb(),
+            )
+
+
+async def cmd_fallback(message: Message, state: FSMContext) -> None:
+    """Всё что не поймали роутеры — показываем главное меню."""
+    current_state = await state.get_state()
+    if current_state is not None:
+        # Внутри FSM — не перебиваем
+        return
+    await message.answer(
+        "Выбери действие:",
+        reply_markup=main_menu_kb(),
+    )
 
 
 async def main() -> None:
     log.info("Starting bot...")
     bot = Bot(token=settings.bot_token)
     dp = Dispatcher()
+
     dp.message.register(cmd_start, CommandStart())
     dp.include_router(filters_router.router)
     dp.include_router(suggest_router.router)
+
+    # Fallback — регистрируем последним, чтобы не перехватывать FSM-сообщения
+    dp.message.register(cmd_fallback, F.text)
+
     await dp.start_polling(bot)
 
 

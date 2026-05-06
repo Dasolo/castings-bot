@@ -1,7 +1,7 @@
 import logging
 import re
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -36,7 +36,7 @@ class SuggestStates(StatesGroup):
     waiting_for_channel = State()
 
 
-@router.message(Command("suggest"))
+@router.message(F.text.in_({"/suggest", "📢 Предложить канал"}))
 async def cmd_suggest(message: Message, state: FSMContext) -> None:
     await state.set_state(SuggestStates.waiting_for_channel)
     await message.answer(

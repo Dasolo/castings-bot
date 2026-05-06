@@ -64,7 +64,7 @@ async def _get_db_user(tg_id: int, session) -> User | None:
 
 # ── /filters — точка входа ────────────────────────────────────────────────────
 
-@router.message(F.text == "/filters")
+@router.message(F.text.in_({"/filters", "🎛 Мои фильтры"}))
 async def cmd_filters(message: Message) -> None:
     async with AsyncSessionFactory() as session:
         user = await _get_db_user(message.from_user.id, session)
@@ -274,11 +274,24 @@ async def reset_filters(cb: CallbackQuery) -> None:
 
 
 def _main_kb():
-    return _kb(
+    b = InlineKeyboardBuilder()
+    for label, data in [
         ("👤 Пол",            "flt:edit:gender"),
         ("🎂 Возраст",        "flt:edit:age"),
         ("📍 Локация",        "flt:edit:location"),
         ("🎬 Тип проекта",    "flt:edit:project_types"),
         ("💰 Только платные", "flt:edit:fee_only"),
         ("🗑 Сбросить всё",   "flt:reset"),
-    ).as_markup()
+    ]:
+        b.add(InlineKeyboardButton(text=label, callback_data=data))
+    b.adjust(2)
+    b.row(InlineKeyboardButton(text="← Главное меню", callback_data="flt:back"))
+    return b.as_markup()
+
+
+@router.callback_query(F.data == "flt:back")
+async def go_back(cb: CallbackQuery) -> None:
+    from .main import main_menu_kb  # локальный импорт во избежание цикла
+    await cb.message.delete()
+    await cb.message.answer("Выбери действие:", reply_markup=main_menu_kb())
+    await cb.answer()
