@@ -236,9 +236,6 @@ def classify_with_vacancies(raw_text: str) -> dict:
     location = extract_location(raw_text)
     project_type = extract_project_type(raw_text)
 
-    # Проверяем, есть ли хотя бы одна валидная вакансия
-    has_valid_vacancy = any(v["is_valid"] for v in vacancies)
-
     return {
         "text_hash": compute_text_hash(raw_text),
         "location": location,
@@ -248,7 +245,6 @@ def classify_with_vacancies(raw_text: str) -> dict:
         "classified_by": "regex",
         "confidence": None,
         "vacancies": vacancies,  # Добавляем вакансии в результат
-        "is_valid": has_valid_vacancy,
     }
 
 # ---------------------------------------------------------------------------
