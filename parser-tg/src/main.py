@@ -30,7 +30,7 @@ LOCATION_ALIASES: dict[str, list[str]] = {
     ],
     "Московская область": [
         "московская область", "московской области", "подмосковье", "подмосковья",
-        "подмосковью", "мособласть", "мо"
+        "подмосковью", "мособласть", "мо",
     ],
     "Санкт-Петербург": [
         "санкт-петербург", "санкт петербург", "петербург", "питер", "питере",
@@ -199,27 +199,57 @@ def is_casting_valid(
     return any([gender, age_min is not None, age_max is not None, location, project_type])
 
 
-def classify(raw_text: str) -> dict:
+def extract_vacancies(raw_text: str) -> list[dict]:
+    """
+    Извлекает все вакансии из текста кастинга.
+    Возвращает список словарей с полями: gender, age_min, age_max, fee_type, is_valid
+    """
+    t = _normalize(raw_text)
+    vacancies = []
+
+    # TODO: Здесь будет более сложная логика поиска нескольких вакансий
+    # Пока что создаем одну вакансию на основе всего текста
+
     gender = extract_gender(raw_text)
     age_min, age_max = extract_age(raw_text)
-    location = extract_location(raw_text)
-    project_type = extract_project_type(raw_text)
     fee_type = extract_fee_type(raw_text)
-    valid = is_casting_valid(gender, age_min, age_max, location, project_type)
 
-    return {
-        "text_hash": compute_text_hash(raw_text),
+    # Временная валидация - позже заменим на более умную
+    is_valid = any([gender, age_min is not None, age_max is not None])
+
+    vacancies.append({
         "gender": gender,
         "age_min": age_min,
         "age_max": age_max,
+        "fee_type": fee_type,
+        "fee_max": None,  # TODO: извлекать из текста
+        "is_valid": is_valid,
+    })
+
+    return vacancies
+
+def classify_with_vacancies(raw_text: str) -> dict:
+    """Классифицирует кастинг и извлекает вакансии"""
+    vacancies = extract_vacancies(raw_text)
+
+    # Общие поля кастинга (не зависящие от конкретной вакансии)
+    location = extract_location(raw_text)
+    project_type = extract_project_type(raw_text)
+
+    # Проверяем, есть ли хотя бы одна валидная вакансия
+    has_valid_vacancy = any(v["is_valid"] for v in vacancies)
+
+    return {
+        "text_hash": compute_text_hash(raw_text),
         "location": location,
         "project_type": project_type,
-        "fee_type": fee_type,
-        "is_valid": valid,
+        "deadline": None,  # TODO: извлекать дедлайн
+        "media_file_ids": [],  # TODO: извлекать из raw_data
         "classified_by": "regex",
         "confidence": None,
+        "vacancies": vacancies,  # Добавляем вакансии в результат
+        "is_valid": has_valid_vacancy,
     }
-
 
 # ---------------------------------------------------------------------------
 # Parser job
@@ -243,38 +273,59 @@ async def parse_batch() -> None:
     saved = skipped = 0
 
     for msg in messages:
-        fields = classify(msg.raw_text)
+        # Получаем классификацию с вакансиями
+        fields = classify_with_vacancies(msg.raw_text)
+
+        # Извлекаем вакансии из полей
+        vacancies_data = fields.pop("vacancies", [])
 
         async with AsyncSessionFactory() as session:
-            stmt = (
-                insert(Casting)
-                .values(raw_message_id=msg.id, **fields)
-                .on_conflict_do_nothing(index_elements=["text_hash"])
-            )
-            result = await session.execute(stmt)
-            inserted = result.rowcount > 0
+            try:
+                # 1. Вставляем кастинг (без вакансий)
+                stmt = (
+                    insert(Casting)
+                    .values(raw_message_id=msg.id, **fields)
+                    .on_conflict_do_nothing(index_elements=["text_hash"])
+                    .returning(Casting.id)
+                )
+                result = await session.execute(stmt)
+                casting_id = result.scalar_one_or_none()
 
-            await session.execute(
-                update(RawMessage)
-                .where(RawMessage.id == msg.id)
-                .values(parsed_at=datetime.now(timezone.utc))
-            )
-            await session.commit()
+                if casting_id:
+                    # 2. Вставляем вакансии для этого кастинга
+                    from shared.models import Vacancy
 
-        if inserted:
-            saved += 1
-            log.debug(
-                "Saved casting raw_msg_id=%d valid=%s gender=%s age=%s-%s loc=%s type=%s fee=%s",
-                msg.id, fields["is_valid"], fields["gender"],
-                fields["age_min"], fields["age_max"],
-                fields["location"], fields["project_type"], fields["fee_type"],
-            )
-        else:
-            skipped += 1
-            log.debug("Skipped duplicate raw_msg_id=%d hash=%s", msg.id, fields["text_hash"])
+                    for vacancy_data in vacancies_data:
+                        vacancy_stmt = insert(Vacancy).values(
+                            casting_id=casting_id,
+                            **vacancy_data
+                        )
+                        await session.execute(vacancy_stmt)
+
+                    saved += 1
+                    log.debug(
+                        "Saved casting id=%d with %d vacancies",
+                        casting_id, len(vacancies_data)
+                    )
+                else:
+                    # Дубликат кастинга (по text_hash)
+                    skipped += 1
+                    log.debug("Skipped duplicate hash=%s", fields["text_hash"])
+
+                # 3. Помечаем raw_message как обработанный
+                await session.execute(
+                    update(RawMessage)
+                    .where(RawMessage.id == msg.id)
+                    .values(parsed_at=datetime.now(timezone.utc))
+                )
+                await session.commit()
+
+            except Exception as e:
+                await session.rollback()
+                log.error("Failed to process raw_msg_id=%d: %s", msg.id, e)
+                raise
 
     log.info("Batch done: %d saved, %d duplicates", saved, skipped)
-
 
 async def main() -> None:
     log.info("Starting parser-tg...")
