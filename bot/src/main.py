@@ -10,6 +10,7 @@ from shared.config import settings
 from shared.db import AsyncSessionFactory
 from shared.models import User
 from . import filters as filters_router
+from . import suggest as suggest_router
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -50,6 +51,7 @@ async def main() -> None:
     dp = Dispatcher()
     dp.message.register(cmd_start, CommandStart())
     dp.include_router(filters_router.router)
+    dp.include_router(suggest_router.router)
     await dp.start_polling(bot)
 
 
