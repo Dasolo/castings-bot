@@ -5,6 +5,7 @@ from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import selectinload
 
 from shared.config import settings
 from shared.db import AsyncSessionFactory
@@ -16,11 +17,59 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+def _matches(casting: Casting, uf) -> bool:
+    """True если кастинг проходит фильтр пользователя."""
+    if uf is None:
+        return True  # фильтров нет — слать всё
+
+    # Локация
+    if uf.location and casting.location:
+        if uf.location.lower() not in casting.location.lower():
+            return False
+
+    # Тип проекта
+    if uf.project_types and casting.project_type:
+        if casting.project_type not in uf.project_types:
+            return False
+
+    # Только платные
+    if uf.fee_only:
+        has_paid = any(v.fee_type == "paid" for v in casting.vacancies)
+        if not has_paid:
+            return False
+
+    # Пол и возраст — матчим по вакансиям
+    if uf.gender or uf.age:
+        matched_vacancy = False
+        for v in casting.vacancies:
+            gender_ok = (
+                not uf.gender
+                or v.gender in (uf.gender, "any", None)
+            )
+            age_ok = (
+                not uf.age
+                or (
+                    (v.age_min is None or v.age_min <= uf.age)
+                    and (v.age_max is None or v.age_max >= uf.age)
+                )
+            )
+            if gender_ok and age_ok:
+                matched_vacancy = True
+                break
+        if casting.vacancies and not matched_vacancy:
+            return False
+        # если вакансий нет — пропускаем (парсер ещё не разобрал)
+
+    return True
+
 
 async def send_batch(bot: Bot) -> None:
     async with AsyncSessionFactory() as session:
+
         users_result = await session.execute(
-            select(User).where(User.is_active == True)
+            select(User)
+            .where(User.is_active == True)
+            .options(selectinload(User.filters))
         )
         users = users_result.scalars().all()
 
@@ -33,6 +82,7 @@ async def send_batch(bot: Bot) -> None:
             select(Casting, RawMessage, Source)
             .join(RawMessage, Casting.raw_message_id == RawMessage.id)
             .join(Source, RawMessage.source_id == Source.id)
+            .options(selectinload(Casting.vacancies))   # ← добавить
             .where(
                 ~Casting.id.in_(
                     select(SentLog.casting_id).where(
@@ -56,6 +106,8 @@ async def send_batch(bot: Bot) -> None:
         link = f"https://t.me/{source.external_id}/{msg_id}"
 
         for user in users:
+            if not _matches(casting, user.filters):
+                continue
             try:
                 await bot.send_message(
                     chat_id=user.tg_user_id,
