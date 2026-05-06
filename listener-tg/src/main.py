@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
+from pyrogram.enums import ChatType
 from pyrogram.types import Message
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -122,6 +123,10 @@ async def main() -> None:
             "Received message from chat_id=%s username=%s msg_id=%s",
             message.chat.id, message.chat.username, message.id,
         )
+
+        if message.chat.type not in (ChatType.CHANNEL, ChatType.SUPERGROUP):
+            log.debug("Skipping non-channel message from chat_id=%s type=%s", message.chat.id, message.chat.type)
+            return
 
         source = source_by_id.get(message.chat.id)
         if source is None and message.chat.username:
