@@ -98,34 +98,37 @@ async def main() -> None:
         except FloodWait as e:
             log.warning("FloodWait %ds for %s, skipping history", e.value, source.external_id)
 
-    channel_ids = [s.external_id for s in sources]
+    # Строим маппинг числовой_id → source (надёжнее username)
+    source_by_id: dict[int, Source] = {}
+    source_by_username: dict[str, Source] = {}
 
-    log.info("Registered handler for channels: %s", channel_ids)
-    for ch_id in channel_ids:
+    for source in sources:
         try:
-            chat = await app.get_chat(ch_id)
+            chat = await app.get_chat(source.external_id)
+            source_by_id[chat.id] = source
+            if chat.username:
+                source_by_username[chat.username.lower()] = source
             log.info("Channel check: %s → id=%s type=%s members=%s",
-                    ch_id, chat.id, chat.type, chat.members_count)
+                    source.external_id, chat.id, chat.type, chat.members_count)
         except Exception as e:
-            log.warning("Channel check failed for %s: %s", ch_id, e)
+            log.warning("Channel check failed for %s: %s", source.external_id, e)
 
-    @app.on_message(filters.chat(channel_ids))
+    channel_numeric_ids = list(source_by_id.keys())
+    log.info("Registered handler for channel ids: %s", channel_numeric_ids)
+
+    @app.on_message(filters.chat(channel_numeric_ids))
     async def on_new_message(client: Client, message: Message) -> None:
         log.info(
             "Received message from chat_id=%s username=%s msg_id=%s",
             message.chat.id, message.chat.username, message.id,
         )
 
-        async with AsyncSessionFactory() as session:
-            source_result = await session.execute(
-                select(Source).where(
-                    Source.external_id == message.chat.username,
-                    Source.source_type == "telegram",
-                )
-            )
-            source = source_result.scalar_one_or_none()
+        source = source_by_id.get(message.chat.id)
+        if source is None and message.chat.username:
+            source = source_by_username.get(message.chat.username.lower())
 
         if source is None:
+            log.warning("Source not found for chat_id=%s", message.chat.id)
             return
 
         inserted = await save_message(source, message)
@@ -134,12 +137,12 @@ async def main() -> None:
 
     @app.on_message()
     async def on_any_message(client: Client, message: Message) -> None:
-        log.debug(
+        log.info(
             "ANY message: chat_id=%s username=%s type=%s",
             message.chat.id, message.chat.username, message.chat.type,
         )
 
-    log.info("Listening on %d channels", len(channel_ids))
+    log.info("Listening on %d channels", len(channel_numeric_ids))
     await asyncio.Event().wait()
 
 
