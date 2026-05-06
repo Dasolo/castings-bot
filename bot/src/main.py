@@ -72,8 +72,8 @@ async def main() -> None:
     dp = Dispatcher()
 
     dp.message.register(cmd_start, CommandStart())
-    dp.include_router(filters_router.router)
-    dp.include_router(suggest_router.router)
+    dp.include_router(filters_router)
+    dp.include_router(suggest_router)
 
     # Fallback — регистрируем последним, чтобы не перехватывать FSM-сообщения
     dp.message.register(cmd_fallback, F.text)
