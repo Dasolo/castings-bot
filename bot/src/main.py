@@ -9,6 +9,7 @@ from sqlalchemy import select
 from shared.config import settings
 from shared.db import AsyncSessionFactory
 from shared.models import User
+from bot.src import filters as filters_router
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -48,6 +49,7 @@ async def main() -> None:
     bot = Bot(token=settings.bot_token)
     dp = Dispatcher()
     dp.message.register(cmd_start, CommandStart())
+    dp.include_router(filters_router.router)
     await dp.start_polling(bot)
 
 
