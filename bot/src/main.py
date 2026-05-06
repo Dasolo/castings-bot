@@ -9,7 +9,7 @@ from sqlalchemy import select
 from shared.config import settings
 from shared.db import AsyncSessionFactory
 from shared.models import User
-from bot.src import filters as filters_router
+from . import filters as filters_router
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
