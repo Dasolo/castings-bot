@@ -14,15 +14,29 @@ from sqlalchemy import select
 from shared.config import settings
 from shared.db import AsyncSessionFactory
 from shared.models import User
-from . import main_menu_kb
-from . import router as filters_router
-from . import router as suggest_router
+from keyboards import main_menu_kb
+from filters import router as filters_router
+from suggest import router as suggest_router
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 log = logging.getLogger(__name__)
+
+
+def main_menu_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="🎛 Мои фильтры"),
+                KeyboardButton(text="📢 Предложить канал"),
+            ]
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Выбери действие...",
+    )
+
 
 async def cmd_start(message: Message) -> None:
     tg_id = message.from_user.id
