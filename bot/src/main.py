@@ -14,9 +14,9 @@ from sqlalchemy import select
 from shared.config import settings
 from shared.db import AsyncSessionFactory
 from shared.models import User
-from .keyboards import main_menu_kb
-from .filters import router as filters_router
-from .suggest import router as suggest_router
+from src.keyboards import main_menu_kb
+from src.filters import router as filters_router
+from src.suggest import router as suggest_router
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
