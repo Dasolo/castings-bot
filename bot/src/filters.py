@@ -291,7 +291,7 @@ def _main_kb():
 
 @router.callback_query(F.data == "flt:back")
 async def go_back(cb: CallbackQuery) -> None:
-    from keyboards import main_menu_kb   # локальный импорт во избежание цикла
+    from .main import main_menu_kb  # локальный импорт во избежание цикла
     await cb.message.delete()
     await cb.message.answer("Выбери действие:", reply_markup=main_menu_kb())
     await cb.answer()
